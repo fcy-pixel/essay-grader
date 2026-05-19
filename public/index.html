@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>English Essay Auto-Grader - Powered by Qwen</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #eff6ff; }
+        .markdown-body h3 { font-size: 1.25rem; font-weight: 700; margin-top: 1.2rem; margin-bottom: 0.5rem; color: #1e40af; border-bottom: 1px solid #bfdbfe; padding-bottom: 0.25rem;}
+        .markdown-body.summary-card h3 { color: #5b21b6; border-bottom-color: #ddd6fe; }
+        .markdown-body p { margin-bottom: 0.75rem; line-height: 1.6; }
+        .markdown-body ul { list-style-type: disc; padding-left: 1.5rem; margin-bottom: 1rem; }
+        .markdown-body li { margin-bottom: 0.35rem; }
+        .markdown-body hr { border-color: #bfdbfe; margin: 1.5rem 0; }
+        .markdown-body strong { color: #1d4ed8; }
+        .markdown-body.summary-card strong { color: #6d28d9; }
+        .markdown-body blockquote { border-left: 4px solid #93c5fd; padding-left: 1rem; color: #4b5563; background-color: #f8fafc; padding: 0.5rem 1rem; border-radius: 0 0.5rem 0.5rem 0; margin-bottom: 1rem;}
+        .markdown-body table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; font-size: 0.95rem; }
+        .markdown-body th, .markdown-body td { border: 1px solid #d1d5db; padding: 0.5rem 0.75rem; text-align: left; }
+        .markdown-body th { background-color: #f3f4f6; color: #374151; font-weight: bold; }
+        .markdown-body tr:nth-child(even) { background-color: #f9fafb; }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    </style>
+</head>
+<body class="min-h-screen p-4 md:p-8 text-gray-800">
+    <div class="max-w-6xl mx-auto">
+        <!-- Header -->
+        <header class="mb-8 text-center">
+            <h1 class="text-3xl md:text-4xl font-extrabold text-blue-800 mb-2 tracking-tight">
+                <i class="fa-solid fa-pen-nib mr-3 text-blue-600"></i>English Essay Auto-Grader
+            </h1>
+            <p class="text-blue-600 font-medium">Positive reinforcement & learning analytics for Content, Language & Organization (Powered by Qwen)</p>
+        </header>
+
+        <!-- Main Content Grid -->
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <!-- Left Column: Inputs -->
+            <div class="lg:col-span-5 space-y-6">
+                <!-- Settings Panel -->
+                <div class="bg-white p-5 rounded-2xl shadow-sm border border-blue-100">
+                    <h2 class="text-lg font-bold text-gray-700 mb-4 flex items-center"><i class="fa-solid fa-sliders text-blue-400 mr-2"></i> Grading Settings</h2>
+                    <div class="space-y-4">
+                        <div class="grid grid-cols-3 gap-3 pt-2">
+                            <div>
+                                <label class="block text-xs font-bold text-gray-500 mb-1">Content Score</label>
+                                <input type="number" id="scoreContent" value="40" min="1" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-bold text-gray-500 mb-1">Language Score</label>
+                                <input type="number" id="scoreLanguage" value="40" min="1" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-bold text-gray-500 mb-1">Organization</label>
+                                <input type="number" id="scoreOrganization" value="20" min="1" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition">
+                            </div>
+                        </div>
+                        <div>
+                            <label for="outputFormat" class="block text-sm font-medium text-gray-600 mb-1">Output Mode</label>
+                            <select id="outputFormat" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition bg-white">
+                                <option value="individual">Individual Grading &amp; Feedback Only</option>
+                                <option value="full" selected>Individual Grading + Class Analytics</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Test Data Panel -->
+                <div class="bg-white p-5 rounded-2xl shadow-sm border border-blue-100 flex-grow">
+                    <h2 class="text-lg font-bold text-gray-700 mb-4 flex items-center"><i class="fa-solid fa-file-lines text-blue-400 mr-2"></i> Writing Data</h2>
+                    <div class="space-y-5">
+
+                        <!-- Writing Prompt -->
+                        <div class="p-4 bg-indigo-50 border border-indigo-100 rounded-xl">
+                            <h3 class="font-bold text-indigo-800 mb-3"><i class="fa-solid fa-book-open mr-2"></i>Writing Prompt</h3>
+                            <div>
+                                <label for="writingPrompt" class="block text-xs font-medium text-indigo-700 mb-1">Enter topic and word count limits (For AI reference)</label>
+                                <textarea id="writingPrompt" rows="3" placeholder="e.g., Write a story about your favourite animal. (At least 50 words)..." class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition resize-none text-sm"></textarea>
+                            </div>
+                            <div class="mt-3">
+                                <label class="block text-xs font-medium text-indigo-700 mb-1">Or upload prompt images/PDF (Optional)</label>
+                                <input type="file" id="uploadPromptFile" accept="image/*, application/pdf" class="w-full text-xs text-gray-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:font-semibold file:bg-indigo-100 file:text-indigo-800 hover:file:bg-indigo-200 transition">
+                                <div id="promptFilePreviewContainer" class="mt-2 hidden bg-white p-2 rounded-lg border border-indigo-200 text-center">
+                                    <span id="promptPdfInfo" class="hidden text-xs text-indigo-600 font-bold mb-1 block">Prompt file loaded</span>
+                                    <img id="promptPreviewImg" class="max-h-24 mx-auto rounded border border-gray-200 shadow-sm hidden" alt="Prompt Preview" />
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Student Submissions -->
+                        <div class="p-4 bg-blue-50 border border-blue-100 rounded-xl">
+                            <h3 class="font-bold text-blue-800 mb-3"><i class="fa-solid fa-users mr-2"></i>Student Submissions</h3>
+                            <div class="mb-3">
+                                <label class="block text-xs font-medium text-blue-700 mb-1">Upload submissions (Images or multi-page PDF)</label>
+                                <input type="file" id="uploadFile" accept="image/*, application/pdf" class="w-full text-xs text-gray-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:font-semibold file:bg-blue-100 file:text-blue-800 hover:file:bg-blue-200 transition">
+                                <div class="mt-3 flex items-center justify-between bg-white p-2.5 rounded-lg border border-blue-200 shadow-sm">
+                                    <label for="pagesPerStudent" class="text-sm font-bold text-blue-800 flex items-center"><i class="fa-solid fa-layer-group text-blue-400 mr-2"></i> Pages per student:</label>
+                                    <div class="flex items-center">
+                                        <input type="number" id="pagesPerStudent" value="1" min="1" class="w-16 px-2 py-1 text-center font-bold border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 outline-none">
+                                        <span class="text-xs text-gray-500 ml-2">pages</span>
+                                    </div>
+                                </div>
+                                <div id="filePreviewContainer" class="mt-3 hidden bg-white p-3 rounded-lg border border-blue-200">
+                                    <div id="pdfInfo" class="hidden flex justify-between items-center text-blue-700 font-medium mb-2 text-sm">
+                                        <span><i class="fa-solid fa-file-pdf text-red-500 mr-1"></i> <span id="pdfPageCount">Loaded</span></span>
+                                        <span id="studentCountInfo" class="font-bold text-blue-800 bg-blue-100 px-2 py-0.5 rounded"></span>
+                                    </div>
+                                    <img id="previewImg" class="max-h-32 mx-auto rounded border border-gray-300 shadow-sm hidden" alt="Submission Preview" />
+                                </div>
+                            </div>
+                            <div>
+                                <label for="studentAnswers" class="block text-xs font-medium text-blue-700 mb-1">Or paste student text directly (Optional)</label>
+                                <textarea id="studentAnswers" rows="3" placeholder="Paste student writing here..." class="w-full px-4 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition resize-none"></textarea>
+                            </div>
+                        </div>
+
+                        <button id="gradeBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 px-4 rounded-xl shadow-lg hover:shadow-xl transition-all flex justify-center items-center transform hover:-translate-y-0.5"><i class="fa-solid fa-wand-magic-sparkles mr-2"></i> Start Qwen AI Grading &amp; Analysis</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column: Output -->
+            <div class="lg:col-span-7 bg-white p-6 rounded-2xl shadow-sm border border-blue-100 flex flex-col h-full min-h-[600px]">
+                <h2 class="text-xl font-bold text-gray-800 mb-4 flex items-center pb-3 border-b border-gray-100"><i class="fa-solid fa-clipboard-check text-green-500 mr-2"></i> Grading Results &amp; Feedback</h2>
+
+                <div id="loadingIndicator" class="hidden flex-col items-center justify-center flex-grow text-blue-600 space-y-4 py-12">
+                    <i class="fa-solid fa-spinner fa-spin-pulse text-5xl text-blue-500"></i>
+                    <p class="font-bold text-lg animate-pulse">Miss Qwen is carefully reading the essays...</p>
+                    <p id="progressText" class="text-sm font-medium text-blue-800 bg-blue-50 px-4 py-1.5 rounded-full border border-blue-100"></p>
+                </div>
+
+                <div id="errorMessage" class="hidden p-4 bg-red-50 text-red-700 rounded-xl border border-red-200 mb-4">
+                    <div class="flex items-center mb-2">
+                        <i class="fa-solid fa-triangle-exclamation mr-2 text-lg"></i>
+                        <h3 class="font-bold">Error Occurred</h3>
+                    </div>
+                    <p id="errorText" class="text-sm"></p>
+                </div>
+
+                <div id="resultArea" class="flex-grow overflow-auto hidden space-y-6 pb-6 pr-2"></div>
+
+                <div id="emptyState" class="flex flex-col items-center justify-center flex-grow text-gray-400 space-y-4 py-12">
+                    <div class="w-24 h-24 bg-gray-50 rounded-full flex items-center justify-center mb-2">
+                        <i class="fa-solid fa-book-open-reader text-5xl text-gray-300"></i>
+                    </div>
+                    <p class="font-medium text-gray-500">No grading performed yet. Configure settings and click start.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+        let pagesData = [];
+        let promptPagesData = [];
+        let isPdf = false;
+
+        function showGlobalError(msg) {
+            const errorBox = document.getElementById('errorMessage');
+            const errorText = document.getElementById('errorText');
+            const emptyState = document.getElementById('emptyState');
+            errorText.textContent = msg;
+            errorBox.classList.remove('hidden');
+            emptyState.classList.add('hidden');
+        }
+
+        document.getElementById('pagesPerStudent').addEventListener('input', updateStudentCountInfo);
+
+        function updateStudentCountInfo() {
+            const studentCountInfo = document.getElementById('studentCountInfo');
+            const pagesPerStudent = parseInt(document.getElementById('pagesPerStudent').value, 10) || 1;
+            if (pagesData.length > 0) {
+                const estStudents = Math.ceil(pagesData.length / pagesPerStudent);
+                studentCountInfo.textContent = `~ ${estStudents} student(s)`;
+                studentCountInfo.classList.remove('hidden');
+            } else {
+                studentCountInfo.classList.add('hidden');
+            }
+        }
+
+        async function processFileToImages(e, dataArray, containerId, pdfInfoId, pageCountId, imgPreviewId) {
+            const file = e.target.files[0];
+            const container = document.getElementById(containerId);
+            const pdfInfo = document.getElementById(pdfInfoId);
+            const pageCountText = document.getElementById(pageCountId);
+            const imgPreview = document.getElementById(imgPreviewId);
+            const btn = document.getElementById('gradeBtn');
+
+            dataArray.length = 0;
+
+            if (!file) {
+                container.classList.add('hidden');
+                if (dataArray === pagesData) updateStudentCountInfo();
+                return;
+            }
+
+            container.classList.remove('hidden');
+            btn.disabled = true;
+            const originalBtnHtml = btn.innerHTML;
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-2"></i> Processing file...';
+
+            try {
+                if (file.type === 'application/pdf') {
+                    if (dataArray === pagesData) isPdf = true;
+                    pdfInfo.classList.remove('hidden');
+                    imgPreview.classList.add('hidden');
+                    if (pageCountText) pageCountText.textContent = "Reading PDF...";
+
+                    const arrayBuffer = await file.arrayBuffer();
+                    const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+                    const totalPages = pdf.numPages;
+
+                    for (let i = 1; i <= totalPages; i++) {
+                        const page = await pdf.getPage(i);
+                        const viewport = page.getViewport({ scale: 1.5 });
+                        const canvas = document.createElement('canvas');
+                        const context = canvas.getContext('2d');
+                        canvas.width = viewport.width;
+                        canvas.height = viewport.height;
+                        await page.render({ canvasContext: context, viewport: viewport }).promise;
+                        dataArray.push(canvas.toDataURL('image/jpeg', 0.8));
+                    }
+                    if (pageCountText) pageCountText.textContent = `Total ${totalPages} pages`;
+                    if (dataArray === pagesData) updateStudentCountInfo();
+
+                } else if (file.type.startsWith('image/')) {
+                    if (dataArray === pagesData) isPdf = false;
+                    pdfInfo.classList.add('hidden');
+                    imgPreview.classList.remove('hidden');
+
+                    const reader = new FileReader();
+                    reader.onload = function(event) {
+                        dataArray.push(event.target.result);
+                        imgPreview.src = event.target.result;
+                        if (dataArray === pagesData) updateStudentCountInfo();
+                    };
+                    reader.readAsDataURL(file);
+                }
+            } catch (error) {
+                showGlobalError("File processing failed: " + error.message);
+                container.classList.add('hidden');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = originalBtnHtml;
+            }
+        }
+
+        document.getElementById('uploadFile').addEventListener('change', (e) => {
+            processFileToImages(e, pagesData, 'filePreviewContainer', 'pdfInfo', 'pdfPageCount', 'previewImg');
+        });
+
+        document.getElementById('uploadPromptFile').addEventListener('change', (e) => {
+            processFileToImages(e, promptPagesData, 'promptFilePreviewContainer', 'promptPdfInfo', null, 'promptPreviewImg');
+        });
+
+        document.getElementById('gradeBtn').addEventListener('click', async () => {
+            const sContent = document.getElementById('scoreContent').value;
+            const sLanguage = document.getElementById('scoreLanguage').value;
+            const sOrg = document.getElementById('scoreOrganization').value;
+            const totalScore = parseInt(sContent) + parseInt(sLanguage) + parseInt(sOrg);
+
+            const outputFormat = document.getElementById('outputFormat').value;
+            const pagesPerStudent = parseInt(document.getElementById('pagesPerStudent').value, 10) || 1;
+            const writingPrompt = document.getElementById('writingPrompt').value.trim();
+            const stuAns = document.getElementById('studentAnswers').value.trim();
+
+            const errorBox = document.getElementById('errorMessage');
+            const errorText = document.getElementById('errorText');
+            const resultArea = document.getElementById('resultArea');
+            const emptyState = document.getElementById('emptyState');
+            const loading = document.getElementById('loadingIndicator');
+            const progressText = document.getElementById('progressText');
+            const btn = document.getElementById('gradeBtn');
+
+            errorBox.classList.add('hidden');
+            resultArea.classList.add('hidden');
+            resultArea.innerHTML = '';
+            emptyState.classList.add('hidden');
+            loading.classList.remove('hidden');
+            loading.classList.add('flex');
+            btn.disabled = true;
+            btn.classList.add('opacity-70', 'cursor-not-allowed');
+
+            if (!stuAns && pagesData.length === 0) {
+                showError("Student writing content cannot be empty! Please paste text or upload images/PDF.");
+                resetLoading();
+                return;
+            }
+
+            const systemPrompt = `You are a passionate and experienced English Teacher. Your task is to grade students' English writing. Maintain a "positive and encouraging" tone, using simple and easy-to-understand words. Since the target audience is young students, your feedback must be constructive and motivating. Do not be overly strict; acknowledge their effort and point out specific areas for improvement. All feedback MUST be in English.`;
+
+            const markingInstruction = `Please grade the writing based on the following criteria, out of ${totalScore} total points:
+1. Content - ${sContent} points: Is the story on-topic, interesting, and detailed?
+2. Language - ${sLanguage} points: Is grammar and vocabulary accurate and varied?
+3. Organization - ${sOrg} points: Are paragraphs well-structured and sentences coherent?
+
+Strictly output in the following Markdown format:
+### 📊 Scores
+* **Content:** [Score] / ${sContent}
+* **Language:** [Score] / ${sLanguage}
+* **Organization:** [Score] / ${sOrg}
+* **🏆 Total Score:** [Total] / ${totalScore}
+
+### 🌟 Overall Feedback
+[Provide a short, positive, and encouraging summary of their performance.]
+
+### 📝 Specific Feedback
+* **💡 Content:** [Point out what they did well and suggest improvements]
+* **✍️ Language:** [Discuss the strengths and weaknesses in their vocabulary and grammar]
+* **🧩 Organization:** [Evaluate the structure and coherence]
+
+### 🔧 Let's Learn Together!
+Identify 2 to 3 key grammar or spelling mistakes and present them in a table:
+| Original Sentence | Suggested Correction | Why? |
+|---|---|---|
+| [Sentence] | [Correction] | [Simple explanation] |`;
+
+            const studentsCount = pagesData.length > 0 ? Math.ceil(pagesData.length / pagesPerStudent) : 1;
+            resultArea.classList.remove('hidden');
+
+            let allStudentsResultsForAnalysis = [];
+
+            try {
+                for (let i = 0; i < studentsCount; i++) {
+                    progressText.textContent = `Carefully grading: Student ${i + 1} / ${studentsCount}...`;
+
+                    let userPrompt = `[Writing Prompt]:\n${writingPrompt ? writingPrompt : "No specific prompt provided. Please infer the topic from the student's writing."}\n\n`;
+                    userPrompt += `Please grade this student's writing.\n\n`;
+                    if (stuAns && !isPdf) {
+                        userPrompt += `[Student Writing Content]:\n${stuAns}\n\n`;
+                    }
+                    userPrompt += markingInstruction;
+
+                    let imagesForCurrentStudent = [];
+                    if (promptPagesData.length > 0) {
+                        imagesForCurrentStudent = imagesForCurrentStudent.concat(promptPagesData);
+                    }
+                    if (pagesData.length > 0) {
+                        const startIndex = i * pagesPerStudent;
+                        const endIndex = startIndex + pagesPerStudent;
+                        imagesForCurrentStudent = imagesForCurrentStudent.concat(pagesData.slice(startIndex, endIndex));
+                    }
+
+                    const responseText = await callQwenAPI(systemPrompt, userPrompt, imagesForCurrentStudent);
+                    allStudentsResultsForAnalysis.push(`【Student #${i + 1}】\n${responseText}`);
+
+                    const resultCard = document.createElement('div');
+                    resultCard.className = 'bg-white p-6 rounded-2xl border border-blue-100 shadow-sm markdown-body mb-6 hover:shadow-md transition-shadow';
+
+                    let titleText = `Student #${i + 1}`;
+                    if (pagesData.length > 0) titleText += ` (${Math.min(pagesPerStudent, pagesData.length - i * pagesPerStudent)} page(s) attached)`;
+                    else titleText = `Writing Analysis`;
+
+                    const titleHtml = `<div class="flex items-center justify-between border-b-2 border-blue-200 pb-3 mb-4">
+                        <h3 class="text-xl font-black text-blue-800 m-0 p-0 border-0"><i class="fa-solid fa-user-pen mr-2 text-blue-500"></i> ${titleText}</h3>
+                        <span class="bg-green-100 text-green-800 text-xs font-bold px-3 py-1 rounded-full"><i class="fa-solid fa-check mr-1"></i>Graded</span>
+                    </div>`;
+
+                    resultCard.innerHTML = titleHtml + marked.parse(responseText);
+                    resultArea.appendChild(resultCard);
+                    resultCard.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                }
+
+                if (outputFormat === 'full' && allStudentsResultsForAnalysis.length > 0) {
+                    progressText.textContent = `Grading complete! Generating 📊 Whole Class Performance Analysis...`;
+
+                    const analysisSystemPrompt = `You are an experienced English Panel Chairperson. Your task is to summarize the overall performance and common weaknesses of the class based on multiple students' English writing grading records, and provide actionable teaching suggestions to the subject teachers entirely in English.`;
+
+                    const analysisUserPrompt = `Here are the grading results for the ${studentsCount} students in the class:\n\n${allStudentsResultsForAnalysis.join('\n\n---\n\n')}\n\nPlease analyze the data above and output the following in Markdown format, strictly in English:
+
+### 📈 Overall Class Performance
+Summarize the general performance of the class in Content, Language, and Organization. What did they do well? What are their common weaknesses?
+
+### ⚠️ Common Mistakes Diagnostics
+List the 3 most common grammar, spelling, or sentence structure mistakes made by the class, along with specific examples from their writing.
+
+### 💡 Teaching Strategy Suggestions
+Provide 2 to 3 specific classroom activities or teaching suggestions to help teachers address the weaknesses mentioned above (e.g., suggested games, how to guide brainstorming, sentence-building activities, etc.).`;
+
+                    const analysisResponseText = await callQwenAPI(analysisSystemPrompt, analysisUserPrompt, []);
+
+                    const summaryCard = document.createElement('div');
+                    summaryCard.className = 'bg-gradient-to-br from-indigo-50 to-purple-50 p-6 rounded-2xl border border-indigo-200 shadow-md markdown-body summary-card mt-8';
+                    const summaryTitleHtml = `<div class="flex items-center border-b-2 border-indigo-300 pb-3 mb-4">
+                        <i class="fa-solid fa-chart-pie text-2xl text-indigo-600 mr-3"></i>
+                        <h3 class="text-2xl font-black text-indigo-900 m-0 p-0 border-0">Whole Class Writing Performance Analysis</h3>
+                    </div>`;
+                    summaryCard.innerHTML = summaryTitleHtml + marked.parse(analysisResponseText);
+                    resultArea.appendChild(summaryCard);
+                    setTimeout(() => { summaryCard.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 500);
+                }
+
+                progressText.textContent = `✅ All grading and analysis finished!`;
+                setTimeout(() => {
+                    loading.classList.add('hidden');
+                    loading.classList.remove('flex');
+                }, 1500);
+
+            } catch (error) {
+                showError("Connection or processing failed: " + error.message);
+                emptyState.classList.remove('hidden');
+                loading.classList.add('hidden');
+                loading.classList.remove('flex');
+            } finally {
+                btn.disabled = false;
+                btn.classList.remove('opacity-70', 'cursor-not-allowed');
+            }
+
+            function resetLoading() {
+                loading.classList.add('hidden');
+                loading.classList.remove('flex');
+                btn.disabled = false;
+                btn.classList.remove('opacity-70', 'cursor-not-allowed');
+            }
+
+            function showError(msg) {
+                errorText.textContent = msg;
+                errorBox.classList.remove('hidden');
+                emptyState.classList.remove('hidden');
+            }
+        });
+
+        /**
+         * Calls the Cloudflare Worker proxy endpoint (/api/qwen),
+         * which securely forwards the request to Qwen DashScope International
+         * using the QWEN_API_KEY secret stored on the server.
+         */
+        async function callQwenAPI(systemInstruction, userText, imagesBase64Array, retries = 5) {
+            const proxyUrl = '/api/qwen';
+            const delays = [1000, 2000, 4000, 8000, 16000];
+
+            // Use vision model when images are present, text-only model otherwise
+            const modelName = (imagesBase64Array && imagesBase64Array.length > 0) ? 'qwen-vl-max' : 'qwen-max';
+
+            let userContent = [{ type: "text", text: userText }];
+
+            if (imagesBase64Array && imagesBase64Array.length > 0) {
+                imagesBase64Array.forEach(imgData => {
+                    userContent.push({ type: "image_url", image_url: { url: imgData } });
+                });
+            }
+
+            const payload = {
+                model: modelName,
+                messages: [
+                    { role: "system", content: systemInstruction },
+                    { role: "user", content: userContent }
+                ]
+            };
+
+            for (let i = 0; i < retries; i++) {
+                try {
+                    const response = await fetch(proxyUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (!response.ok) {
+                        const errData = await response.json().catch(() => ({}));
+                        throw new Error(`API Error (${response.status}): ${errData.error?.message || 'Unknown error'}`);
+                    }
+
+                    const result = await response.json();
+                    if (result.choices && result.choices.length > 0) {
+                        return result.choices[0].message.content;
+                    } else {
+                        throw new Error("API failed to return valid content.");
+                    }
+                } catch (error) {
+                    if (i === retries - 1) throw error;
+                    await new Promise(res => setTimeout(res, delays[i]));
+                }
+            }
+        }
+    </script>
+</body>
+</html>
