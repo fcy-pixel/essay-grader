@@ -27,6 +27,11 @@
         ::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 4px; }
         ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
         ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        .chat-bubble-user { background: #dbeafe; border-radius: 1rem 1rem 0.25rem 1rem; }
+        .chat-bubble-ai { background: #f0fdf4; border-radius: 1rem 1rem 1rem 0.25rem; border: 1px solid #bbf7d0; }
+        .chat-bubble-ai.markdown-body p { margin-bottom: 0.4rem; }
+        .chat-bubble-ai.markdown-body ul { margin-bottom: 0.4rem; }
+        .chat-bubble-ai.markdown-body h3 { font-size: 1rem; color: #166534; border-bottom-color: #bbf7d0; }
     </style>
 </head>
 <body class="min-h-screen p-4 md:p-8 text-gray-800">
@@ -151,6 +156,33 @@
                     </div>
                     <p class="font-medium text-gray-500">No grading performed yet. Configure settings and click start.</p>
                 </div>
+            </div>
+        </div>
+        <!-- AI Chat Tutor Panel -->
+        <div id="chatPanel" class="hidden mt-6 bg-white rounded-2xl shadow-sm border border-green-200 overflow-hidden">
+            <div class="flex items-center justify-between p-4 border-b border-green-100 bg-gradient-to-r from-green-50 to-teal-50">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 bg-green-500 rounded-full flex items-center justify-center shadow">
+                        <i class="fa-solid fa-robot text-white text-lg"></i>
+                    </div>
+                    <div>
+                        <h2 class="font-bold text-green-800 text-lg">AI Writing Tutor Chat</h2>
+                        <p class="text-xs text-green-600">Ask anything to improve your essay! 你可以用中文或英文提問 😊</p>
+                    </div>
+                </div>
+                <button id="chatClearBtn" class="text-xs text-gray-400 hover:text-red-400 transition flex items-center gap-1 px-3 py-1.5 rounded-lg hover:bg-red-50">
+                    <i class="fa-solid fa-trash-can"></i> Clear
+                </button>
+            </div>
+            <div id="chatMessages" class="h-96 overflow-y-auto p-4 space-y-4 bg-gray-50"></div>
+            <div class="p-4 border-t border-green-100 bg-white">
+                <div class="flex gap-3 items-end">
+                    <textarea id="chatInput" rows="2" placeholder="e.g. 「點樣改好我段開頭？」 or 'Can you give me a better sentence?'" class="flex-1 px-4 py-2.5 text-sm border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-400 focus:border-green-400 outline-none resize-none transition"></textarea>
+                    <button id="chatSendBtn" class="bg-green-500 hover:bg-green-600 active:bg-green-700 text-white font-bold px-5 py-2.5 rounded-xl transition-all flex items-center gap-2 shadow hover:shadow-md">
+                        <i class="fa-solid fa-paper-plane"></i><span class="hidden sm:inline">Send</span>
+                    </button>
+                </div>
+                <p class="text-xs text-gray-400 mt-2 text-center">Press <kbd class="bg-gray-100 border border-gray-300 rounded px-1">Enter</kbd> to send · <kbd class="bg-gray-100 border border-gray-300 rounded px-1">Shift+Enter</kbd> for new line</p>
             </div>
         </div>
     </div>
@@ -398,6 +430,11 @@ Provide 2 to 3 specific classroom activities or teaching suggestions to help tea
                 }
 
                 progressText.textContent = `✅ All grading and analysis finished!`;
+
+                // Launch AI chat tutor with essay & grading context
+                const essayForChat = stuAns || (pagesData.length > 0 ? '[Essay submitted as image(s)]' : '');
+                initChat(essayForChat, allStudentsResultsForAnalysis.join('\n\n---\n\n'));
+
                 setTimeout(() => {
                     loading.classList.add('hidden');
                     loading.classList.remove('flex');
@@ -427,11 +464,6 @@ Provide 2 to 3 specific classroom activities or teaching suggestions to help tea
             }
         });
 
-        /**
-         * Calls the Cloudflare Worker proxy endpoint (/api/qwen),
-         * which securely forwards the request to Qwen DashScope International
-         * using the QWEN_API_KEY secret stored on the server.
-         */
         async function callQwenAPI(systemInstruction, userText, imagesBase64Array, retries = 5) {
             const proxyUrl = '/api/qwen';
             const delays = [1000, 2000, 4000, 8000, 16000];
@@ -480,6 +512,136 @@ Provide 2 to 3 specific classroom activities or teaching suggestions to help tea
                 }
             }
         }
+        // ─── AI Chat Tutor ────────────────────────────────────────────────────────
+        let chatHistory = [];
+        let chatEssayContext = '';
+        let chatGradingContext = '';
+
+        function initChat(essayText, gradingResults) {
+            chatEssayContext = essayText;
+            chatGradingContext = gradingResults;
+            chatHistory = [];
+            const chatPanel = document.getElementById('chatPanel');
+            const chatMessages = document.getElementById('chatMessages');
+            chatPanel.classList.remove('hidden');
+            chatMessages.innerHTML = '';
+            appendChatBubble('ai', `Hi! I've just finished reviewing the essay(s). You can ask me anything about how to improve the writing — in **English** or **中文** 😊\n\nHere are some ideas:\n- *"How can I improve my vocabulary?"*\n- *"Can you rewrite my opening sentence?"*\n- *「我嘅文章有咩文法錯誤？」*\n- *「點樣令文章更有說服力？」*`);
+            setTimeout(() => chatPanel.scrollIntoView({ behavior: 'smooth', block: 'start' }), 600);
+        }
+
+        function appendChatBubble(role, mdText) {
+            const chatMessages = document.getElementById('chatMessages');
+            const wrapper = document.createElement('div');
+            wrapper.className = role === 'user' ? 'flex justify-end' : 'flex justify-start';
+            const bubble = document.createElement('div');
+            if (role === 'user') {
+                bubble.className = 'chat-bubble-user max-w-[80%] px-4 py-3 text-sm text-gray-800';
+                bubble.textContent = mdText;
+            } else {
+                bubble.className = 'chat-bubble-ai markdown-body max-w-[85%] px-4 py-3 text-sm text-gray-800';
+                bubble.innerHTML = marked.parse(mdText);
+            }
+            wrapper.appendChild(bubble);
+            chatMessages.appendChild(wrapper);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            return { wrapper, bubble };
+        }
+
+        async function sendChatMessage() {
+            const input = document.getElementById('chatInput');
+            const sendBtn = document.getElementById('chatSendBtn');
+            const userText = input.value.trim();
+            if (!userText) return;
+
+            input.value = '';
+            input.disabled = true;
+            sendBtn.disabled = true;
+            sendBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+
+            appendChatBubble('user', userText);
+
+            const chatMessages = document.getElementById('chatMessages');
+            const thinkingWrapper = document.createElement('div');
+            thinkingWrapper.className = 'flex justify-start';
+            thinkingWrapper.innerHTML = `<div class="chat-bubble-ai px-4 py-3 text-sm text-gray-400 italic flex items-center gap-2"><i class="fa-solid fa-spinner fa-spin text-green-400"></i> Thinking...</div>`;
+            chatMessages.appendChild(thinkingWrapper);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+
+            chatHistory.push({ role: 'user', content: userText });
+
+            const systemPrompt = `You are a friendly, warm, and encouraging English writing tutor. You have just graded a student's essay. Help the student improve their writing through supportive conversation.
+
+Essay submitted by the student:
+---
+${chatEssayContext || '[Essay was submitted as image(s) — refer to the grading feedback below]'}
+---
+
+Grading feedback you already provided:
+---
+${chatGradingContext}
+---
+
+Guidelines:
+- Be warm, specific, and constructive — always encourage effort
+- Give concrete examples when suggesting improvements (e.g. show a revised sentence)
+- Respond in the same language the student uses (English, Traditional Chinese, or Cantonese)
+- Keep responses concise and easy for young learners to understand
+- If asked to rewrite a sentence, do so and briefly explain the improvement`;
+
+            try {
+                const messages = [
+                    { role: 'system', content: systemPrompt },
+                    ...chatHistory
+                ];
+                const reply = await callQwenChatMultiTurn(messages);
+                chatMessages.removeChild(thinkingWrapper);
+                appendChatBubble('ai', reply);
+                chatHistory.push({ role: 'assistant', content: reply });
+            } catch (error) {
+                chatMessages.removeChild(thinkingWrapper);
+                appendChatBubble('ai', `Sorry, something went wrong: ${error.message}. Please try again.`);
+                chatHistory.pop();
+            } finally {
+                input.disabled = false;
+                sendBtn.disabled = false;
+                sendBtn.innerHTML = '<i class="fa-solid fa-paper-plane"></i><span class="hidden sm:inline">Send</span>';
+                input.focus();
+            }
+        }
+
+        async function callQwenChatMultiTurn(messages, retries = 3) {
+            const delays = [1000, 2000, 4000];
+            const payload = { model: 'qwen-max', messages };
+            for (let i = 0; i < retries; i++) {
+                try {
+                    const response = await fetch('/api/qwen', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    if (!response.ok) {
+                        const errData = await response.json().catch(() => ({}));
+                        throw new Error(`API Error (${response.status}): ${errData.error?.message || 'Unknown error'}`);
+                    }
+                    const result = await response.json();
+                    if (result.choices && result.choices.length > 0) return result.choices[0].message.content;
+                    throw new Error("API failed to return valid content.");
+                } catch (error) {
+                    if (i === retries - 1) throw error;
+                    await new Promise(res => setTimeout(res, delays[i]));
+                }
+            }
+        }
+
+        document.getElementById('chatSendBtn').addEventListener('click', sendChatMessage);
+        document.getElementById('chatInput').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
+        });
+        document.getElementById('chatClearBtn').addEventListener('click', () => {
+            chatHistory = [];
+            document.getElementById('chatMessages').innerHTML = '';
+            appendChatBubble('ai', "Chat cleared! Feel free to ask me anything about the essay 😊");
+        });
     </script>
 </body>
 </html>
