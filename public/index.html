@@ -530,7 +530,7 @@ Provide 2 to 3 specific classroom activities or teaching suggestions to help tea
             const chatMessages = document.getElementById('chatMessages');
             chatPanel.classList.remove('hidden');
             chatMessages.innerHTML = '';
-            appendChatBubble('ai', `Hi! I've just finished reviewing the essay(s). You can ask me anything about how to improve the writing — in **English** or **中文** 😊\n\nHere are some ideas:\n- *"How can I improve my vocabulary?"*\n- *"Can you rewrite my opening sentence?"*\n- *「我嘅文章有咩文法錯誤？」*\n- *「點樣令文章更有說服力？」*`);
+            appendChatBubble('ai', `Hi! I've read your essay 😊 Ask me anything — **English** 或 **中文** 都得！\n\n例如：\n- *"Can you make my opening sentence better?"*\n- *「我篇文有咩可以改好？」*`);
             setTimeout(() => chatPanel.scrollIntoView({ behavior: 'smooth', block: 'start' }), 600);
         }
 
@@ -567,7 +567,8 @@ Provide 2 to 3 specific classroom activities or teaching suggestions to help tea
         let ttsSeq = 0;
         const ttsBufferCache = new Map(); // stripped text -> AudioBuffer
         const TTS_IDLE_HTML = '<i class="fa-solid fa-volume-high"></i><span>朗讀</span>';
-        const TTS_STOP_HTML = '<i class="fa-solid fa-stop"></i><span>停止</span>';
+        const TTS_PAUSE_HTML = '<i class="fa-solid fa-pause"></i><span>暫停</span>';
+        const TTS_RESUME_HTML = '<i class="fa-solid fa-play"></i><span>繼續</span>';
 
         function stopSpeech() {
             ttsSeq++;
@@ -624,11 +625,37 @@ Provide 2 to 3 specific classroom activities or teaching suggestions to help tea
             currentTtsSession = session;
             currentTtsBtn = btn;
             btn.classList.add('playing');
-            btn.innerHTML = TTS_STOP_HTML;
+            btn.innerHTML = TTS_PAUSE_HTML;
+        }
+
+        // Same button clicked while active: toggle pause/resume in place
+        function toggleTtsPause(btn) {
+            if (browserTtsActive && window.speechSynthesis) {
+                if (speechSynthesis.paused) {
+                    speechSynthesis.resume();
+                    btn.classList.add('playing');
+                    btn.innerHTML = TTS_PAUSE_HTML;
+                } else {
+                    speechSynthesis.pause();
+                    btn.classList.remove('playing');
+                    btn.innerHTML = TTS_RESUME_HTML;
+                }
+                return;
+            }
+            if (!audioCtx) return;
+            if (audioCtx.state === 'running') {
+                audioCtx.suspend();
+                btn.classList.remove('playing');
+                btn.innerHTML = TTS_RESUME_HTML;
+            } else {
+                audioCtx.resume();
+                btn.classList.add('playing');
+                btn.innerHTML = TTS_PAUSE_HTML;
+            }
         }
 
         async function speakText(btn, mdText) {
-            if (currentTtsBtn === btn) { stopSpeech(); return; }
+            if (currentTtsBtn === btn) { toggleTtsPause(btn); return; }
             stopSpeech();
             const mySeq = ttsSeq;
 
@@ -734,7 +761,7 @@ Provide 2 to 3 specific classroom activities or teaching suggestions to help tea
             browserTtsActive = true;
             currentTtsBtn = btn;
             btn.classList.add('playing');
-            btn.innerHTML = TTS_STOP_HTML;
+            btn.innerHTML = TTS_PAUSE_HTML;
             return true;
         }
 
@@ -773,12 +800,12 @@ ${chatGradingContext}
 ---
 
 Guidelines:
-- Be warm, specific, and constructive — always encourage effort
-- Give concrete examples when suggesting improvements (e.g. show a revised sentence)
+- You are talking to a PRIMARY SCHOOL student. Keep every reply SHORT: 2-4 simple sentences. No long explanations or long lists (at most 3 short bullets, only when really needed)
+- Focus on the student's OWN essay: quote the exact words or sentence from their essay you are talking about, then show the improved version
+- Teach only ONE point per reply — the most useful one. If there is more to say, end with a short question like "Want another tip?"
+- Use simple words a 6-12 year old understands; be warm and always encourage effort
 - Respond in the same language the student uses (English, Traditional Chinese, or Cantonese)
-- Chinese must ALWAYS be written in Traditional Chinese characters (繁體字), never Simplified
-- Keep responses concise and easy for young learners to understand
-- If asked to rewrite a sentence, do so and briefly explain the improvement`;
+- Chinese must ALWAYS be written in Traditional Chinese characters (繁體字), never Simplified`;
 
             try {
                 const messages = [
