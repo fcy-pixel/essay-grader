@@ -558,18 +558,23 @@ Provide 2 to 3 specific classroom activities or teaching suggestions to help tea
             return { wrapper, bubble };
         }
 
-        // ─── AI Read-Aloud (TTS) ─────────────────────────────────────────────────
-        let currentTtsAudio = null;
+        // ─── AI Read-Aloud (TTS, streaming via Web Audio API) ───────────────────
+        const TTS_SAMPLE_RATE = 24000;
+        let audioCtx = null;
+        let currentTtsSession = null;
         let currentTtsBtn = null;
         let browserTtsActive = false;
-        const ttsUrlCache = new Map();
+        let ttsSeq = 0;
+        const ttsBufferCache = new Map(); // stripped text -> AudioBuffer
         const TTS_IDLE_HTML = '<i class="fa-solid fa-volume-high"></i><span>朗讀</span>';
         const TTS_STOP_HTML = '<i class="fa-solid fa-stop"></i><span>停止</span>';
 
         function stopSpeech() {
-            if (currentTtsAudio) {
-                currentTtsAudio.pause();
-                currentTtsAudio = null;
+            ttsSeq++;
+            if (currentTtsSession) {
+                currentTtsSession.stopped = true;
+                currentTtsSession.sources.forEach(s => { try { s.stop(); } catch (e) {} });
+                currentTtsSession = null;
             }
             if (browserTtsActive && window.speechSynthesis) {
                 speechSynthesis.cancel();
@@ -590,9 +595,42 @@ Provide 2 to 3 specific classroom activities or teaching suggestions to help tea
             return text.replace(/\s+/g, ' ').trim();
         }
 
+        function pcmToAudioBuffer(bytes) { // Uint8Array of 16-bit LE mono PCM
+            const n = bytes.length >> 1;
+            const buffer = audioCtx.createBuffer(1, n, TTS_SAMPLE_RATE);
+            const ch = buffer.getChannelData(0);
+            const view = new DataView(bytes.buffer, bytes.byteOffset, n * 2);
+            for (let i = 0; i < n; i++) ch[i] = view.getInt16(i * 2, true) / 32768;
+            return buffer;
+        }
+
+        // Schedule a chunk gaplessly on the session's shared timeline
+        function scheduleBuffer(session, buffer) {
+            const src = audioCtx.createBufferSource();
+            src.buffer = buffer;
+            src.connect(audioCtx.destination);
+            const startAt = Math.max(audioCtx.currentTime + 0.08, session.nextTime);
+            src.start(startAt);
+            session.nextTime = startAt + buffer.duration;
+            session.sources.push(src);
+            session.pending++;
+            src.onended = () => {
+                session.pending--;
+                if (session.done && session.pending === 0 && currentTtsSession === session) stopSpeech();
+            };
+        }
+
+        function markPlaying(session, btn) {
+            currentTtsSession = session;
+            currentTtsBtn = btn;
+            btn.classList.add('playing');
+            btn.innerHTML = TTS_STOP_HTML;
+        }
+
         async function speakText(btn, mdText) {
             if (currentTtsBtn === btn) { stopSpeech(); return; }
             stopSpeech();
+            const mySeq = ttsSeq;
 
             const text = stripMarkdownForSpeech(mdText).slice(0, 2000);
             if (!text) return;
@@ -600,34 +638,85 @@ Provide 2 to 3 specific classroom activities or teaching suggestions to help tea
             btn.disabled = true;
             btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i><span>載入中</span>';
             try {
-                let url = ttsUrlCache.get(text);
-                if (!url) {
-                    const response = await fetch('/api/tts', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ text })
-                    });
-                    if (!response.ok) {
-                        const data = await response.json().catch(() => ({}));
-                        throw new Error(data.error?.message || `TTS error (${response.status})`);
-                    }
-                    const blob = await response.blob();
-                    url = URL.createObjectURL(blob);
-                    ttsUrlCache.set(text, url);
+                audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+                if (audioCtx.state === 'suspended') await audioCtx.resume();
+                if (mySeq !== ttsSeq) { // superseded by another click
+                    if (currentTtsBtn !== btn) btn.innerHTML = TTS_IDLE_HTML;
+                    return;
                 }
-                const audio = new Audio(url);
-                audio.onended = () => { if (currentTtsAudio === audio) stopSpeech(); };
-                audio.onerror = () => { if (currentTtsAudio === audio) stopSpeech(); };
-                await audio.play();
-                currentTtsAudio = audio;
-                currentTtsBtn = btn;
-                btn.classList.add('playing');
-                btn.innerHTML = TTS_STOP_HTML;
+
+                const session = { stopped: false, done: false, sources: [], pending: 0, nextTime: 0 };
+
+                const cached = ttsBufferCache.get(text);
+                if (cached) {
+                    markPlaying(session, btn);
+                    scheduleBuffer(session, cached);
+                    session.done = true;
+                    return;
+                }
+
+                const response = await fetch('/api/tts', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        text,
+                        language_type: /[一-鿿]/.test(text) ? 'Chinese' : 'English'
+                    })
+                });
+                if (mySeq !== ttsSeq) {
+                    if (currentTtsBtn !== btn) btn.innerHTML = TTS_IDLE_HTML;
+                    return;
+                }
+                if (!response.ok || !response.body) {
+                    const data = await response.json().catch(() => ({}));
+                    throw new Error(data.error?.message || `TTS error (${response.status})`);
+                }
+
+                markPlaying(session, btn);
+
+                // Play chunks as they stream in
+                const reader = response.body.getReader();
+                const allChunks = [];
+                let leftover = new Uint8Array(0);
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (session.stopped) { try { reader.cancel(); } catch (e) {} return; }
+                    if (done) break;
+                    let bytes = value;
+                    if (leftover.length) {
+                        const merged = new Uint8Array(leftover.length + bytes.length);
+                        merged.set(leftover);
+                        merged.set(bytes, leftover.length);
+                        bytes = merged;
+                    }
+                    const usable = bytes.length & ~1; // 16-bit samples only
+                    leftover = bytes.slice(usable);
+                    if (!usable) continue;
+                    const chunk = bytes.slice(0, usable);
+                    allChunks.push(chunk);
+                    scheduleBuffer(session, pcmToAudioBuffer(chunk));
+                }
+
+                session.done = true;
+                if (session.pending === 0 && currentTtsSession === session) { stopSpeech(); }
+
+                // Cache the full utterance for instant replay
+                if (allChunks.length) {
+                    const total = allChunks.reduce((sum, c) => sum + c.length, 0);
+                    const merged = new Uint8Array(total);
+                    let offset = 0;
+                    for (const c of allChunks) { merged.set(c, offset); offset += c.length; }
+                    ttsBufferCache.set(text, pcmToAudioBuffer(merged));
+                }
             } catch (error) {
+                const startedPlaying = currentTtsBtn === btn && currentTtsSession && currentTtsSession.sources.length > 0;
+                stopSpeech();
                 // Fall back to the browser's built-in speech synthesis
-                if (speakWithBrowser(btn, text)) return;
-                btn.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i><span>朗讀失敗，再試一次</span>';
-                setTimeout(() => { if (currentTtsBtn !== btn) btn.innerHTML = TTS_IDLE_HTML; }, 3000);
+                if (!startedPlaying && speakWithBrowser(btn, text)) return;
+                if (!startedPlaying) {
+                    btn.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i><span>朗讀失敗，再試一次</span>';
+                    setTimeout(() => { if (currentTtsBtn !== btn) btn.innerHTML = TTS_IDLE_HTML; }, 3000);
+                }
             } finally {
                 btn.disabled = false;
             }
@@ -637,7 +726,7 @@ Provide 2 to 3 specific classroom activities or teaching suggestions to help tea
             if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) return false;
             speechSynthesis.cancel();
             const utterance = new SpeechSynthesisUtterance(text);
-            utterance.lang = /[一-鿿]/.test(text) ? 'zh-HK' : 'en-GB';
+            utterance.lang = /[一-鿿]/.test(text) ? 'zh-TW' : 'en-GB';
             utterance.rate = 0.95;
             utterance.onend = () => { if (currentTtsBtn === btn) stopSpeech(); };
             utterance.onerror = () => { if (currentTtsBtn === btn) stopSpeech(); };
@@ -687,6 +776,7 @@ Guidelines:
 - Be warm, specific, and constructive — always encourage effort
 - Give concrete examples when suggesting improvements (e.g. show a revised sentence)
 - Respond in the same language the student uses (English, Traditional Chinese, or Cantonese)
+- Chinese must ALWAYS be written in Traditional Chinese characters (繁體字), never Simplified
 - Keep responses concise and easy for young learners to understand
 - If asked to rewrite a sentence, do so and briefly explain the improvement`;
 

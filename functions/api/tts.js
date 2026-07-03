@@ -1,11 +1,12 @@
 /**
- * Cloudflare Pages Function – Qwen TTS Proxy
+ * Cloudflare Pages Function – Qwen TTS Proxy (streaming)
  * Route: POST /api/tts
- * Body:  { "text": "...", "voice": "Cherry" (optional) }
- * Returns: audio bytes (wav/mp3) ready to play
+ * Body:  { "text": "...", "voice": "Cherry"?, "language_type": "Chinese"|"English"|"Auto"? }
+ * Returns: raw 16-bit mono PCM stream @ 24kHz (application/octet-stream),
+ *          streamed to the client as the model generates it.
  *
  * Primary:  qwen3-tts-instruct-flash-realtime (WebSocket realtime API)
- * Fallback: qwen3-tts-flash (HTTP multimodal-generation API)
+ * Fallback: qwen3-tts-flash (HTTP, non-streaming; PCM extracted from its WAV)
  * Uses the same QWEN_API_KEY secret as /api/qwen.
  */
 
@@ -14,6 +15,10 @@ const REALTIME_URL = `https://dashscope-intl.aliyuncs.com/api-ws/v1/realtime?mod
 const HTTP_TTS_ENDPOINT =
   'https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation';
 const SAMPLE_RATE = 24000;
+const LANGUAGE_TYPES = new Set([
+  'Auto', 'Chinese', 'English', 'German', 'Italian', 'Portuguese',
+  'Spanish', 'Japanese', 'Korean', 'French', 'Russian',
+]);
 
 export async function onRequestPost({ request, env }) {
   const apiKey = env.QWEN_API_KEY;
@@ -37,18 +42,19 @@ export async function onRequestPost({ request, env }) {
     return jsonResponse({ error: { message: 'Missing "text" in request body.' } }, 400);
   }
   const voice = (body.voice || 'Cherry').toString();
+  const languageType = LANGUAGE_TYPES.has(body.language_type) ? body.language_type : 'Auto';
 
   const errors = [];
 
-  // 1) Realtime WebSocket model
+  // 1) Realtime WebSocket model — streams PCM as it is generated
   try {
-    const wav = await realtimeTts(apiKey, text, voice);
-    return audioResponse(wav, 'audio/wav');
+    const readable = await realtimeTtsStream(apiKey, text, voice, languageType);
+    return pcmResponse(readable);
   } catch (err) {
     errors.push(`${REALTIME_MODEL}: ${err.message}`);
   }
 
-  // 2) Fallback: qwen3-tts-flash over HTTP
+  // 2) Fallback: qwen3-tts-flash over HTTP (whole file, then PCM extracted)
   try {
     const upstream = await fetch(HTTP_TTS_ENDPOINT, {
       method: 'POST',
@@ -58,7 +64,7 @@ export async function onRequestPost({ request, env }) {
       },
       body: JSON.stringify({
         model: 'qwen3-tts-flash',
-        input: { text, voice, language_type: 'Auto' },
+        input: { text, voice, language_type: languageType },
       }),
     });
     const data = await upstream.json();
@@ -66,10 +72,7 @@ export async function onRequestPost({ request, env }) {
     if (upstream.ok && audioUrl) {
       const audioResp = await fetch(audioUrl.replace(/^http:\/\//, 'https://'));
       if (audioResp.ok) {
-        return audioResponse(
-          await audioResp.arrayBuffer(),
-          audioResp.headers.get('Content-Type') || 'audio/wav'
-        );
+        return pcmResponse(extractPcmFromWav(await audioResp.arrayBuffer()));
       }
       errors.push(`qwen3-tts-flash: audio download failed (${audioResp.status})`);
     } else {
@@ -85,11 +88,11 @@ export async function onRequestPost({ request, env }) {
 }
 
 /**
- * Synthesize speech via the DashScope realtime WebSocket API.
- * Appends the full text, commits, finishes the session, and collects
- * base64 PCM deltas into a single WAV buffer.
+ * Open the DashScope realtime WebSocket, send the full text, and resolve with
+ * a ReadableStream of raw PCM bytes as soon as the first audio delta arrives.
+ * Rejects if no audio could be obtained (so the caller can fall back).
  */
-async function realtimeTts(apiKey, text, voice) {
+async function realtimeTtsStream(apiKey, text, voice, languageType) {
   const resp = await fetch(REALTIME_URL, {
     headers: {
       Upgrade: 'websocket',
@@ -104,21 +107,37 @@ async function realtimeTts(apiKey, text, voice) {
   }
   ws.accept();
 
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    let settled = false;
+  const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
 
-    const finish = (err) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
+  return new Promise((resolve, reject) => {
+    let gotAudio = false;
+    let closed = false;
+
+    const cleanup = () => {
+      clearTimeout(startTimer);
+      clearTimeout(hardTimer);
       try { ws.close(); } catch {}
-      if (!err && chunks.length === 0) err = new Error('No audio received from realtime API.');
-      if (err) reject(err);
-      else resolve(pcmToWav(concatChunks(chunks), SAMPLE_RATE));
+    };
+    // Before first audio: reject so the caller can fall back.
+    // After first audio: just end the stream early.
+    const fail = (err) => {
+      if (closed) return;
+      closed = true;
+      cleanup();
+      if (gotAudio) writer.close().catch(() => {});
+      else reject(err);
+    };
+    const end = () => {
+      if (closed) return;
+      closed = true;
+      cleanup();
+      writer.close().catch(() => {});
+      if (!gotAudio) reject(new Error('No audio received from realtime API.'));
     };
 
-    const timer = setTimeout(() => finish(new Error('Realtime TTS timed out.')), 45000);
+    const startTimer = setTimeout(() => fail(new Error('No audio within 20s.')), 20000);
+    const hardTimer = setTimeout(end, 90000);
 
     ws.addEventListener('message', (event) => {
       let msg;
@@ -130,6 +149,7 @@ async function realtimeTts(apiKey, text, voice) {
           type: 'session.update',
           session: {
             voice,
+            language_type: languageType,
             response_format: 'pcm',
             sample_rate: SAMPLE_RATE,
             mode: 'commit',
@@ -139,17 +159,23 @@ async function realtimeTts(apiKey, text, voice) {
         ws.send(JSON.stringify({ type: 'input_text_buffer.commit' }));
         ws.send(JSON.stringify({ type: 'session.finish' }));
       } else if (type.endsWith('audio.delta') && msg.delta) {
-        chunks.push(base64ToBytes(msg.delta));
+        const bytes = base64ToBytes(msg.delta);
+        if (!gotAudio) {
+          gotAudio = true;
+          clearTimeout(startTimer);
+          resolve(readable);
+        }
+        writer.write(bytes).catch(() => fail(new Error('Client disconnected.')));
       } else if (type === 'session.finished' || type === 'session.done') {
-        finish();
+        end();
       } else if (type === 'error' || msg.error) {
         const e = msg.error || msg;
-        finish(new Error(e.message || JSON.stringify(e).slice(0, 200)));
+        fail(new Error(e.message || JSON.stringify(e).slice(0, 200)));
       }
     });
 
-    ws.addEventListener('close', () => finish());
-    ws.addEventListener('error', () => finish(new Error('WebSocket connection error.')));
+    ws.addEventListener('close', end);
+    ws.addEventListener('error', () => fail(new Error('WebSocket connection error.')));
   });
 }
 
@@ -160,45 +186,26 @@ function base64ToBytes(b64) {
   return bytes;
 }
 
-function concatChunks(chunks) {
-  const total = chunks.reduce((sum, c) => sum + c.length, 0);
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const c of chunks) { out.set(c, offset); offset += c.length; }
-  return out;
+/** Pull the raw PCM samples out of a WAV container. */
+function extractPcmFromWav(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const view = new DataView(buffer);
+  let offset = 12; // skip RIFF header
+  while (offset + 8 <= bytes.length) {
+    const id = String.fromCharCode(bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]);
+    const size = view.getUint32(offset + 4, true);
+    if (id === 'data') return bytes.slice(offset + 8, offset + 8 + size);
+    offset += 8 + size + (size & 1);
+  }
+  return bytes; // not a RIFF file — pass through untouched
 }
 
-/** Wrap raw 16-bit mono PCM in a WAV container. */
-function pcmToWav(pcm, sampleRate) {
-  const header = new ArrayBuffer(44);
-  const view = new DataView(header);
-  const writeStr = (offset, str) => {
-    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
-  };
-  writeStr(0, 'RIFF');
-  view.setUint32(4, 36 + pcm.length, true);
-  writeStr(8, 'WAVE');
-  writeStr(12, 'fmt ');
-  view.setUint32(16, 16, true);        // fmt chunk size
-  view.setUint16(20, 1, true);         // PCM
-  view.setUint16(22, 1, true);         // mono
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true); // byte rate
-  view.setUint16(32, 2, true);         // block align
-  view.setUint16(34, 16, true);        // bits per sample
-  writeStr(36, 'data');
-  view.setUint32(40, pcm.length, true);
-
-  const wav = new Uint8Array(44 + pcm.length);
-  wav.set(new Uint8Array(header), 0);
-  wav.set(pcm, 44);
-  return wav.buffer;
-}
-
-function audioResponse(buffer, contentType) {
-  return new Response(buffer, {
+function pcmResponse(bodyInit) {
+  return new Response(bodyInit, {
     headers: {
-      'Content-Type': contentType,
+      'Content-Type': 'application/octet-stream',
+      'X-Sample-Rate': String(SAMPLE_RATE),
+      'X-Audio-Format': 'pcm16le-mono',
       'Cache-Control': 'no-store',
       'Access-Control-Allow-Origin': '*',
     },
