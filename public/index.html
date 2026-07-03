@@ -32,6 +32,10 @@
         .chat-bubble-ai.markdown-body p { margin-bottom: 0.4rem; }
         .chat-bubble-ai.markdown-body ul { margin-bottom: 0.4rem; }
         .chat-bubble-ai.markdown-body h3 { font-size: 1rem; color: #166534; border-bottom-color: #bbf7d0; }
+        .tts-btn { display: inline-flex; align-items: center; gap: 0.3rem; margin-top: 0.4rem; padding: 0.2rem 0.55rem; font-size: 0.72rem; color: #16a34a; background: #ffffff; border: 1px solid #bbf7d0; border-radius: 9999px; cursor: pointer; transition: all 0.15s; }
+        .tts-btn:hover { background: #dcfce7; }
+        .tts-btn:disabled { opacity: 0.6; cursor: wait; }
+        .tts-btn.playing { color: #ffffff; background: #22c55e; border-color: #22c55e; }
     </style>
 </head>
 <body class="min-h-screen p-4 md:p-8 text-gray-800">
@@ -518,6 +522,7 @@ Provide 2 to 3 specific classroom activities or teaching suggestions to help tea
         let chatGradingContext = '';
 
         function initChat(essayText, gradingResults) {
+            stopSpeech();
             chatEssayContext = essayText;
             chatGradingContext = gradingResults;
             chatHistory = [];
@@ -540,11 +545,108 @@ Provide 2 to 3 specific classroom activities or teaching suggestions to help tea
             } else {
                 bubble.className = 'chat-bubble-ai markdown-body max-w-[85%] px-4 py-3 text-sm text-gray-800';
                 bubble.innerHTML = marked.parse(mdText);
+                const ttsBtn = document.createElement('button');
+                ttsBtn.className = 'tts-btn';
+                ttsBtn.title = '朗讀 / Read aloud';
+                ttsBtn.innerHTML = '<i class="fa-solid fa-volume-high"></i><span>朗讀</span>';
+                ttsBtn.addEventListener('click', () => speakText(ttsBtn, mdText));
+                bubble.appendChild(ttsBtn);
             }
             wrapper.appendChild(bubble);
             chatMessages.appendChild(wrapper);
             chatMessages.scrollTop = chatMessages.scrollHeight;
             return { wrapper, bubble };
+        }
+
+        // ─── AI Read-Aloud (TTS) ─────────────────────────────────────────────────
+        let currentTtsAudio = null;
+        let currentTtsBtn = null;
+        let browserTtsActive = false;
+        const ttsUrlCache = new Map();
+        const TTS_IDLE_HTML = '<i class="fa-solid fa-volume-high"></i><span>朗讀</span>';
+        const TTS_STOP_HTML = '<i class="fa-solid fa-stop"></i><span>停止</span>';
+
+        function stopSpeech() {
+            if (currentTtsAudio) {
+                currentTtsAudio.pause();
+                currentTtsAudio = null;
+            }
+            if (browserTtsActive && window.speechSynthesis) {
+                speechSynthesis.cancel();
+                browserTtsActive = false;
+            }
+            if (currentTtsBtn) {
+                currentTtsBtn.classList.remove('playing');
+                currentTtsBtn.innerHTML = TTS_IDLE_HTML;
+                currentTtsBtn = null;
+            }
+        }
+
+        function stripMarkdownForSpeech(mdText) {
+            const div = document.createElement('div');
+            div.innerHTML = marked.parse(mdText);
+            let text = div.textContent || '';
+            text = text.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}]/gu, '');
+            return text.replace(/\s+/g, ' ').trim();
+        }
+
+        async function speakText(btn, mdText) {
+            if (currentTtsBtn === btn) { stopSpeech(); return; }
+            stopSpeech();
+
+            const text = stripMarkdownForSpeech(mdText).slice(0, 2000);
+            if (!text) return;
+
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i><span>載入中</span>';
+            try {
+                let url = ttsUrlCache.get(text);
+                if (!url) {
+                    const response = await fetch('/api/tts', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text })
+                    });
+                    if (!response.ok) {
+                        const data = await response.json().catch(() => ({}));
+                        throw new Error(data.error?.message || `TTS error (${response.status})`);
+                    }
+                    const blob = await response.blob();
+                    url = URL.createObjectURL(blob);
+                    ttsUrlCache.set(text, url);
+                }
+                const audio = new Audio(url);
+                audio.onended = () => { if (currentTtsAudio === audio) stopSpeech(); };
+                audio.onerror = () => { if (currentTtsAudio === audio) stopSpeech(); };
+                await audio.play();
+                currentTtsAudio = audio;
+                currentTtsBtn = btn;
+                btn.classList.add('playing');
+                btn.innerHTML = TTS_STOP_HTML;
+            } catch (error) {
+                // Fall back to the browser's built-in speech synthesis
+                if (speakWithBrowser(btn, text)) return;
+                btn.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i><span>朗讀失敗，再試一次</span>';
+                setTimeout(() => { if (currentTtsBtn !== btn) btn.innerHTML = TTS_IDLE_HTML; }, 3000);
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        function speakWithBrowser(btn, text) {
+            if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) return false;
+            speechSynthesis.cancel();
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = /[一-鿿]/.test(text) ? 'zh-HK' : 'en-GB';
+            utterance.rate = 0.95;
+            utterance.onend = () => { if (currentTtsBtn === btn) stopSpeech(); };
+            utterance.onerror = () => { if (currentTtsBtn === btn) stopSpeech(); };
+            speechSynthesis.speak(utterance);
+            browserTtsActive = true;
+            currentTtsBtn = btn;
+            btn.classList.add('playing');
+            btn.innerHTML = TTS_STOP_HTML;
+            return true;
         }
 
         async function sendChatMessage() {
@@ -638,6 +740,7 @@ Guidelines:
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
         });
         document.getElementById('chatClearBtn').addEventListener('click', () => {
+            stopSpeech();
             chatHistory = [];
             document.getElementById('chatMessages').innerHTML = '';
             appendChatBubble('ai', "Chat cleared! Feel free to ask me anything about the essay 😊");
